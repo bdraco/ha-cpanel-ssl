@@ -1,0 +1,73 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "description": "Connect to the cPanel account that hosts your domain. Create an API token in cPanel under Security, Manage API Tokens. If Home Assistant is not serving HTTPS yet, it is switched over and restarted once; confirm the new HTTP settings when asked.",
+        "data": {
+          "host": "cPanel host",
+          "port": "cPanel port",
+          "username": "cPanel username",
+          "api_token": "API token",
+          "domain": "Home Assistant hostname",
+          "verify_ssl": "Verify the cPanel certificate",
+          "dynamic_dns": "Manage Dynamic DNS"
+        },
+        "data_description": {
+          "host": "The hostname you use to log in to cPanel, for example server.example.com.",
+          "domain": "The name Home Assistant is reached at, for example home.example.com. AutoSSL issues the certificate for it.",
+          "dynamic_dns": "Point this name at your public IP using cPanel Dynamic DNS. The record is created if it does not exist and updated every five minutes."
+        }
+      },
+      "reauth_confirm": {
+        "description": "cPanel rejected the API token for {username} on {host}. Enter a new one.",
+        "data": {
+          "api_token": "API token"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect",
+      "invalid_auth": "Invalid authentication",
+      "api_error": "cPanel returned an error: {error}",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "reauth_successful": "Re-authentication was successful",
+      "single_instance_allowed": "Already configured. Only a single configuration possible."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "update_interval": "Certificate check interval",
+          "dynamic_dns": "Manage Dynamic DNS"
+        },
+        "data_description": {
+          "dynamic_dns": "Keep the Dynamic DNS record pointed at your public IP."
+        }
+      }
+    }
+  },
+  "entity": {
+    "button": {
+      "refresh_certificate": {
+        "name": "Refresh certificate"
+      },
+      "update_ip": {
+        "name": "Update IP"
+      }
+    },
+    "sensor": {
+      "certificate_expiry": {
+        "name": "Certificate expiry"
+      }
+    }
+  },
+  "issues": {
+    "https_not_confirmed": {
+      "title": "HTTPS was not turned on",
+      "description": "Home Assistant was switched to HTTPS with the certificate in {cert_path}, but the new HTTP settings were not confirmed and were reverted. To try again, go to Settings, System, Network and under HTTP server set the SSL certificate path to `{cert_path}` and the SSL key path to `{key_path}`."
+    }
+  }
+}
