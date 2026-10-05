@@ -10,7 +10,7 @@ import voluptuous as vol
 from homeassistant.config_entries import (
     ConfigFlow,
     ConfigFlowResult,
-    OptionsFlow,
+    OptionsFlowWithReload,
 )
 from homeassistant.const import (
     CONF_API_TOKEN,
@@ -19,8 +19,7 @@ from homeassistant.const import (
     CONF_USERNAME,
     CONF_VERIFY_SSL,
 )
-from homeassistant.core import callback
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.selector import (
     NumberSelector,
     NumberSelectorConfig,
@@ -33,9 +32,9 @@ from homeassistant.helpers.selector import (
 from .api import (
     CpanelApiError,
     CpanelAuthError,
-    CpanelClient,
     CpanelConnectionError,
     CpanelNoCertificateError,
+    async_create_client,
 )
 from .const import (
     CONF_DOMAIN,
@@ -54,19 +53,11 @@ URL_SELECTOR = TextSelector(TextSelectorConfig(type=TextSelectorType.URL))
 
 
 async def _async_validate(
-    flow: ConfigFlow, data: Mapping[str, Any]
+    hass: HomeAssistant, data: Mapping[str, Any]
 ) -> tuple[dict[str, str], dict[str, str]]:
     """Fetch the certificate once; return errors and description placeholders."""
-    client = CpanelClient(
-        async_get_clientsession(flow.hass),
-        data[CONF_HOST],
-        data[CONF_PORT],
-        data[CONF_USERNAME],
-        data[CONF_API_TOKEN],
-        data[CONF_VERIFY_SSL],
-    )
     try:
-        await client.fetch_certificate(data[CONF_DOMAIN])
+        await async_create_client(hass, data).fetch_certificate(data[CONF_DOMAIN])
     except CpanelAuthError:
         return {"base": "invalid_auth"}, {}
     except CpanelConnectionError:
@@ -106,24 +97,14 @@ class CpanelSslConfigFlow(ConfigFlow, domain=DOMAIN):
         placeholders: dict[str, str] = {}
         if user_input is not None:
             user_input[CONF_DOMAIN] = user_input[CONF_DOMAIN].strip().lower()
-            await self.async_set_unique_id(user_input[CONF_DOMAIN])
-            self._abort_if_unique_id_configured()
-            errors, placeholders = await _async_validate(self, user_input)
+            errors, placeholders = await _async_validate(self.hass, user_input)
             if not errors:
+                options = _build_options(user_input)
+                user_input.pop(CONF_WEBCALL_URL, None)
                 return self.async_create_entry(
                     title=user_input[CONF_DOMAIN],
-                    data={
-                        key: user_input[key]
-                        for key in (
-                            CONF_HOST,
-                            CONF_PORT,
-                            CONF_USERNAME,
-                            CONF_API_TOKEN,
-                            CONF_VERIFY_SSL,
-                            CONF_DOMAIN,
-                        )
-                    },
-                    options=_build_options(user_input),
+                    data=user_input,
+                    options=options,
                 )
 
         suggested = user_input or {}
@@ -162,7 +143,7 @@ class CpanelSslConfigFlow(ConfigFlow, domain=DOMAIN):
         placeholders: dict[str, str] = {}
         if user_input is not None:
             data = {**entry.data, CONF_API_TOKEN: user_input[CONF_API_TOKEN]}
-            errors, placeholders = await _async_validate(self, data)
+            errors, placeholders = await _async_validate(self.hass, data)
             if not errors:
                 return self.async_update_reload_and_abort(entry, data=data)
         return self.async_show_form(
@@ -178,12 +159,14 @@ class CpanelSslConfigFlow(ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     @callback
-    def async_get_options_flow(config_entry: CpanelSslConfigEntry) -> OptionsFlow:
+    def async_get_options_flow(
+        config_entry: CpanelSslConfigEntry,
+    ) -> OptionsFlowWithReload:
         """Return the options flow."""
         return CpanelSslOptionsFlow()
 
 
-class CpanelSslOptionsFlow(OptionsFlow):
+class CpanelSslOptionsFlow(OptionsFlowWithReload):
     """Change the update interval and Dynamic DNS webcall."""
 
     async def async_step_init(

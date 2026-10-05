@@ -20,7 +20,14 @@ from homeassistant.const import CONF_API_TOKEN
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
-from .conftest import ENTRY_DATA, FETCH_URL, FQDN, WEBCALL_URL, uapi_ok
+from .conftest import (
+    ENTRY_DATA,
+    FETCH_URL,
+    FQDN,
+    WEBCALL_OPTIONS,
+    WEBCALL_URL,
+    uapi_ok,
+)
 
 USER_INPUT = {**ENTRY_DATA, CONF_DOMAIN: " Home.Example.com "}
 
@@ -47,7 +54,6 @@ async def test_user_flow(hass: HomeAssistant) -> None:
         CONF_UPDATE_INTERVAL: 12,
         CONF_WEBCALL_URL: WEBCALL_URL,
     }
-    assert result["result"].unique_id == FQDN
 
 
 async def test_user_flow_suggests_external_url(hass: HomeAssistant) -> None:
@@ -131,20 +137,19 @@ async def test_reauth(hass: HomeAssistant, mock_config_entry: MockConfigEntry) -
     assert mock_config_entry.data[CONF_API_TOKEN] == "new"
 
 
+@pytest.mark.parametrize("entry_options", [WEBCALL_OPTIONS])
 async def test_options_flow(
-    hass: HomeAssistant, mock_config_entry_webcall: MockConfigEntry
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
 ) -> None:
     """Test clearing the webcall and changing the interval."""
-    mock_config_entry_webcall.add_to_hass(hass)
-    await hass.config_entries.async_setup(mock_config_entry_webcall.entry_id)
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    result = await hass.config_entries.options.async_init(
-        mock_config_entry_webcall.entry_id
-    )
+    result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {CONF_UPDATE_INTERVAL: 6.0}
     )
     await hass.async_block_till_done()
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert mock_config_entry_webcall.options == {CONF_UPDATE_INTERVAL: 6}
+    assert mock_config_entry.options == {CONF_UPDATE_INTERVAL: 6}

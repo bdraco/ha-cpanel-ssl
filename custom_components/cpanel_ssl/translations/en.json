@@ -33,7 +33,6 @@
       "unknown": "Unexpected error"
     },
     "abort": {
-      "already_configured": "Device is already configured",
       "reauth_successful": "Re-authentication was successful",
       "single_instance_allowed": "Already configured. Only a single configuration possible."
     }
@@ -70,10 +69,6 @@
     "ssl_not_configured": {
       "title": "Home Assistant is not serving HTTPS",
       "description": "The certificate was saved to {cert_path} and {key_path}, but Home Assistant is not using it. Add the following to configuration.yaml and restart:\n\n```yaml\nhttp:\n  ssl_certificate: {cert_path}\n  ssl_key: {key_path}\n```"
-    },
-    "restart_required": {
-      "title": "Restart to use the new certificate",
-      "description": "A new certificate for {domain} was installed but could not be loaded into the running web server. Restart Home Assistant to start using it."
     }
   }
 }

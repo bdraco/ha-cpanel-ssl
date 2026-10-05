@@ -19,6 +19,7 @@ from custom_components.cpanel_ssl.const import (
     CONF_DOMAIN,
     CONF_UPDATE_INTERVAL,
     CONF_WEBCALL_URL,
+    DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
 )
 from homeassistant.const import (
@@ -119,24 +120,25 @@ def mock_http(hass: HomeAssistant, ssl_paths: tuple[Path, Path]) -> SimpleNamesp
 
 
 @pytest.fixture
-def mock_config_entry() -> MockConfigEntry:
-    """Return a config entry."""
-    return MockConfigEntry(
-        domain=DOMAIN,
-        title=FQDN,
-        unique_id=FQDN,
-        data=ENTRY_DATA,
-        options={CONF_UPDATE_INTERVAL: 12},
-    )
+def entry_options() -> dict[str, object]:
+    """Return config entry options; override to add a webcall."""
+    return {CONF_UPDATE_INTERVAL: DEFAULT_UPDATE_INTERVAL}
 
 
 @pytest.fixture
-def mock_config_entry_webcall() -> MockConfigEntry:
-    """Return a config entry with a Dynamic DNS webcall."""
+def mock_config_entry(entry_options: dict[str, object]) -> MockConfigEntry:
+    """Return a config entry."""
     return MockConfigEntry(
-        domain=DOMAIN,
-        title=FQDN,
-        unique_id=FQDN,
-        data=ENTRY_DATA,
-        options={CONF_UPDATE_INTERVAL: 12, CONF_WEBCALL_URL: WEBCALL_URL},
+        domain=DOMAIN, title=FQDN, data=ENTRY_DATA, options=entry_options
     )
+
+
+def pem(text: str) -> str:
+    """Normalize PEM text the way it is written to disk."""
+    return text.strip() + "\n"
+
+
+WEBCALL_OPTIONS = {
+    CONF_UPDATE_INTERVAL: DEFAULT_UPDATE_INTERVAL,
+    CONF_WEBCALL_URL: WEBCALL_URL,
+}

@@ -3,9 +3,12 @@
 from homeassistant.components.button import ButtonEntity, ButtonEntityDescription
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .coordinator import CpanelSslConfigEntry
+from .api import CpanelError
+from .coordinator import CpanelSslConfigEntry, CpanelSslCoordinator
+from .dynamic_dns import DynamicDnsUpdater
 from .entity import CpanelSslEntity
 
 PARALLEL_UPDATES = 1
@@ -28,31 +31,41 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up the buttons."""
-    coordinator = entry.runtime_data
-    entities: list[ButtonEntity] = [
-        CpanelSslRefreshButton(coordinator, REFRESH_DESCRIPTION)
-    ]
-    if coordinator.webcall_url:
-        entities.append(CpanelSslUpdateIpButton(coordinator, UPDATE_IP_DESCRIPTION))
+    data = entry.runtime_data
+    entities: list[ButtonEntity] = [CpanelSslRefreshButton(entry, data.coordinator)]
+    if data.dynamic_dns:
+        entities.append(CpanelSslUpdateIpButton(entry, data.dynamic_dns))
     async_add_entities(entities)
 
 
 class CpanelSslRefreshButton(CpanelSslEntity, ButtonEntity):
     """Fetch the certificate from cPanel now."""
 
+    def __init__(
+        self, entry: CpanelSslConfigEntry, coordinator: CpanelSslCoordinator
+    ) -> None:
+        """Initialize the button."""
+        super().__init__(entry, REFRESH_DESCRIPTION)
+        self._coordinator = coordinator
+
     async def async_press(self) -> None:
         """Refresh the certificate."""
-        await self.coordinator.async_request_refresh()
+        await self._coordinator.async_request_refresh()
 
 
 class CpanelSslUpdateIpButton(CpanelSslEntity, ButtonEntity):
     """Call the Dynamic DNS webcall now."""
 
-    @property
-    def available(self) -> bool:
-        """Stay usable even when the certificate fetch is failing."""
-        return True
+    def __init__(
+        self, entry: CpanelSslConfigEntry, dynamic_dns: DynamicDnsUpdater
+    ) -> None:
+        """Initialize the button."""
+        super().__init__(entry, UPDATE_IP_DESCRIPTION)
+        self._dynamic_dns = dynamic_dns
 
     async def async_press(self) -> None:
         """Update the Dynamic DNS record."""
-        await self.coordinator.async_update_dynamic_dns(raise_on_error=True)
+        try:
+            await self._dynamic_dns.async_update()
+        except CpanelError as err:
+            raise HomeAssistantError(f"Dynamic DNS update failed: {err}") from err

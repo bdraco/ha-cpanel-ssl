@@ -1,9 +1,21 @@
 """Minimal client for the cPanel UAPI and Dynamic DNS webcalls."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
 import aiohttp
+
+from homeassistant.const import (
+    CONF_API_TOKEN,
+    CONF_HOST,
+    CONF_PORT,
+    CONF_USERNAME,
+    CONF_VERIFY_SSL,
+)
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.util.json import json_loads
 
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=30)
 
@@ -55,35 +67,39 @@ class CpanelClient:
         port: int,
         username: str,
         token: str,
-        verify_ssl: bool,
     ) -> None:
         """Initialize the client."""
         self._session = session
         self._base_url = f"https://{host}:{port}/execute"
         self._headers = {"Authorization": f"cpanel {username}:{token}"}
-        self.verify_ssl = verify_ssl
 
-    async def _uapi(self, module: str, function: str, **params: str) -> Any:
-        """Call a UAPI function and return its data."""
+    async def _get(self, url: str, **kwargs: Any) -> str:
+        """GET a URL and return the body."""
         try:
             async with self._session.get(
-                f"{self._base_url}/{module}/{function}",
-                params=params,
-                headers=self._headers,
-                ssl=self.verify_ssl,
-                timeout=REQUEST_TIMEOUT,
+                url, timeout=REQUEST_TIMEOUT, **kwargs
             ) as resp:
                 if resp.status in (401, 403):
                     raise CpanelAuthError(f"cPanel returned HTTP {resp.status}")
                 resp.raise_for_status()
-                body = await resp.json(content_type=None)
-        except (aiohttp.ClientError, TimeoutError, ValueError) as err:
+                return await resp.text()
+        except (aiohttp.ClientError, TimeoutError) as err:
             raise CpanelConnectionError(str(err) or type(err).__name__) from err
 
-        result = body.get("result", body)
+    async def _uapi(self, module: str, function: str, **params: str) -> Any:
+        """Call a UAPI function and return its data."""
+        body = await self._get(
+            f"{self._base_url}/{module}/{function}",
+            params=params,
+            headers=self._headers,
+        )
+        try:
+            response: Any = json_loads(body)
+            result = response["result"]
+        except (ValueError, KeyError, TypeError) as err:
+            raise CpanelApiError(f"Unexpected response from cPanel: {err}") from err
         if not result.get("status"):
-            errors = result.get("errors") or ["unknown error"]
-            raise CpanelApiError("; ".join(errors))
+            raise CpanelApiError("; ".join(result.get("errors") or ["unknown error"]))
         return result.get("data")
 
     async def fetch_certificate(self, domain: str) -> Certificate:
@@ -97,14 +113,17 @@ class CpanelClient:
         """Ask cPanel to run AutoSSL for the account."""
         await self._uapi("SSL", "start_autossl_check")
 
+    async def call_webcall(self, url: str) -> str:
+        """Call a Dynamic DNS webcall so cPanel records our public IP."""
+        return (await self._get(url)).strip()
 
-async def async_call_webcall(
-    session: aiohttp.ClientSession, url: str, verify_ssl: bool
-) -> str:
-    """Call a Dynamic DNS webcall so cPanel records our public IP."""
-    try:
-        async with session.get(url, ssl=verify_ssl, timeout=REQUEST_TIMEOUT) as resp:
-            resp.raise_for_status()
-            return (await resp.text()).strip()
-    except (aiohttp.ClientError, TimeoutError) as err:
-        raise CpanelConnectionError(str(err) or type(err).__name__) from err
+
+def async_create_client(hass: HomeAssistant, data: Mapping[str, Any]) -> CpanelClient:
+    """Create a client from config entry data."""
+    return CpanelClient(
+        async_get_clientsession(hass, verify_ssl=data[CONF_VERIFY_SSL]),
+        data[CONF_HOST],
+        data[CONF_PORT],
+        data[CONF_USERNAME],
+        data[CONF_API_TOKEN],
+    )

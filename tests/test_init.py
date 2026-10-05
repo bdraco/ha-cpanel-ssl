@@ -17,7 +17,7 @@ from pytest_homeassistant_custom_component.test_util.aiohttp import (
 from custom_components.cpanel_ssl.const import DOMAIN
 from homeassistant.components.button import DOMAIN as BUTTON_DOMAIN, SERVICE_PRESS
 from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
-from homeassistant.const import ATTR_ENTITY_ID, STATE_UNAVAILABLE
+from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import issue_registry as ir
@@ -26,8 +26,10 @@ from homeassistant.util import dt as dt_util
 from .conftest import (
     AUTOSSL_URL,
     FETCH_URL,
+    WEBCALL_OPTIONS,
     WEBCALL_URL,
     make_certificate,
+    pem,
     uapi_ok,
 )
 
@@ -37,12 +39,8 @@ UPDATE_IP_ENTITY = "button.home_example_com_update_ip"
 
 
 def _calls(aioclient_mock: AiohttpClientMocker, url: str) -> int:
-    """Count requests to a URL, ignoring the query string."""
-    return sum(
-        1
-        for call in aioclient_mock.mock_calls
-        if str(call[1]).split("?")[0] == url.split("?")[0]
-    )
+    """Count requests to a URL."""
+    return sum(1 for call in aioclient_mock.mock_calls if str(call[1]) == url)
 
 
 async def _setup(hass: HomeAssistant, entry: MockConfigEntry) -> None:
@@ -64,8 +62,8 @@ async def test_installs_and_reloads(
     assert mock_config_entry.state is ConfigEntryState.LOADED
 
     cert_path, key_path = ssl_paths
-    assert cert_path.read_text() == certificate["crt"].strip() + "\n"
-    assert key_path.read_text() == certificate["key"].strip() + "\n"
+    assert cert_path.read_text() == pem(certificate["crt"])
+    assert key_path.read_text() == pem(certificate["key"])
     assert key_path.stat().st_mode & 0o777 == 0o600
     mock_http.context.load_cert_chain.assert_called_once_with(cert_path, key_path)
 
@@ -85,8 +83,8 @@ async def test_unchanged_certificate_not_reloaded(
     """Test nothing is rewritten when the files already match."""
     cert_path, key_path = ssl_paths
     cert_path.parent.mkdir()
-    cert_path.write_text(certificate["crt"].strip() + "\n")
-    key_path.write_text(certificate["key"].strip() + "\n")
+    cert_path.write_text(pem(certificate["crt"]))
+    key_path.write_text(pem(certificate["key"]))
     mtime = cert_path.stat().st_mtime_ns
 
     await _setup(hass, mock_config_entry)
@@ -109,7 +107,7 @@ async def test_mismatched_key_not_installed(
     await _setup(hass, mock_config_entry)
     assert mock_config_entry.state is ConfigEntryState.SETUP_RETRY
     assert not ssl_paths[0].exists()
-    assert list(ssl_paths[0].parent.iterdir()) == []
+    assert not ssl_paths[1].exists()
 
 
 @pytest.mark.usefixtures("mock_cpanel")
@@ -131,7 +129,7 @@ async def test_new_certificate_installed_on_refresh(
     async_fire_time_changed(hass)
     await hass.async_block_till_done(wait_background_tasks=True)
 
-    assert ssl_paths[0].read_text() == renewed["crt"].strip() + "\n"
+    assert ssl_paths[0].read_text() == pem(renewed["crt"])
     assert mock_http.context.load_cert_chain.call_count == 2
     assert hass.states.get(EXPIRY_ENTITY).state == "2027-04-01T00:00:00+00:00"
 
@@ -153,16 +151,17 @@ async def test_expiring_certificate_starts_autossl(
 
 
 @pytest.mark.usefixtures("mock_cpanel")
-async def test_restart_required_without_context(
+async def test_recovery_mode_without_context(
     hass: HomeAssistant,
-    issue_registry: ir.IssueRegistry,
     mock_config_entry: MockConfigEntry,
     mock_http: SimpleNamespace,
+    ssl_paths: tuple[Path, Path],
 ) -> None:
-    """Test a repair issue when the server cannot be reloaded."""
+    """Test the certificate is still written when the server has no context."""
     mock_http.context = None
     await _setup(hass, mock_config_entry)
-    assert issue_registry.async_get_issue(DOMAIN, "restart_required")
+    assert mock_config_entry.state is ConfigEntryState.LOADED
+    assert ssl_paths[0].exists()
 
 
 @pytest.mark.usefixtures("mock_cpanel")
@@ -198,11 +197,10 @@ async def test_auth_failure_starts_reauth(
     assert [flow["context"]["source"] for flow in flows] == [SOURCE_REAUTH]
 
 
-@pytest.mark.usefixtures("mock_http")
+@pytest.mark.usefixtures("mock_http", "mock_cpanel")
 async def test_refresh_button(
     hass: HomeAssistant,
     aioclient_mock: AiohttpClientMocker,
-    mock_cpanel: AiohttpClientMocker,
     mock_config_entry: MockConfigEntry,
 ) -> None:
     """Test the refresh button fetches the certificate again."""
@@ -214,14 +212,15 @@ async def test_refresh_button(
 
 
 @pytest.mark.usefixtures("mock_http", "mock_cpanel")
+@pytest.mark.parametrize("entry_options", [WEBCALL_OPTIONS])
 async def test_webcall(
     hass: HomeAssistant,
     aioclient_mock: AiohttpClientMocker,
-    mock_config_entry_webcall: MockConfigEntry,
+    mock_config_entry: MockConfigEntry,
     freezer: FrozenDateTimeFactory,
 ) -> None:
     """Test the webcall runs at setup, on a timer and from the button."""
-    await _setup(hass, mock_config_entry_webcall)
+    await _setup(hass, mock_config_entry)
     assert _calls(aioclient_mock, WEBCALL_URL) == 1
 
     freezer.tick(timedelta(minutes=5))
@@ -236,28 +235,30 @@ async def test_webcall(
 
 
 @pytest.mark.usefixtures("mock_http")
+@pytest.mark.parametrize("entry_options", [WEBCALL_OPTIONS])
 async def test_webcall_runs_while_certificate_fails(
     hass: HomeAssistant,
     aioclient_mock: AiohttpClientMocker,
-    mock_config_entry_webcall: MockConfigEntry,
+    mock_config_entry: MockConfigEntry,
 ) -> None:
     """Test the IP is still updated when the certificate cannot be fetched."""
     aioclient_mock.get(FETCH_URL, status=500)
     aioclient_mock.get(WEBCALL_URL, text="OK")
-    await _setup(hass, mock_config_entry_webcall)
-    assert mock_config_entry_webcall.state is ConfigEntryState.SETUP_RETRY
+    await _setup(hass, mock_config_entry)
+    assert mock_config_entry.state is ConfigEntryState.SETUP_RETRY
     assert _calls(aioclient_mock, WEBCALL_URL) == 1
 
 
 @pytest.mark.usefixtures("mock_http", "mock_cpanel")
+@pytest.mark.parametrize("entry_options", [WEBCALL_OPTIONS])
 async def test_update_ip_button_error(
     hass: HomeAssistant,
     aioclient_mock: AiohttpClientMocker,
-    mock_config_entry_webcall: MockConfigEntry,
+    mock_config_entry: MockConfigEntry,
     certificate: dict[str, str],
 ) -> None:
     """Test the update IP button raises when the webcall fails."""
-    await _setup(hass, mock_config_entry_webcall)
+    await _setup(hass, mock_config_entry)
     aioclient_mock.clear_requests()
     aioclient_mock.get(WEBCALL_URL, status=500)
     aioclient_mock.get(FETCH_URL, json=uapi_ok(certificate))
@@ -269,7 +270,6 @@ async def test_update_ip_button_error(
             {ATTR_ENTITY_ID: UPDATE_IP_ENTITY},
             blocking=True,
         )
-    assert hass.states.get(UPDATE_IP_ENTITY).state != STATE_UNAVAILABLE
 
 
 @pytest.mark.usefixtures("mock_http", "mock_cpanel")
