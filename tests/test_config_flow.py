@@ -1,13 +1,16 @@
 """Tests for the cPanel SSL config flow."""
 
 from typing import Any
+from unittest.mock import AsyncMock
 
-import aiohttp
+from aiocpanel import (
+    CpanelApiError,
+    CpanelAuthError,
+    CpanelConnectionError,
+    CpanelNoCertificateError,
+)
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
-from pytest_homeassistant_custom_component.test_util.aiohttp import (
-    AiohttpClientMocker,
-)
 
 from custom_components.cpanel_ssl.const import (
     CONF_DOMAIN,
@@ -20,25 +23,11 @@ from homeassistant.const import CONF_API_TOKEN
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
-from .conftest import (
-    AUTOSSL_URL,
-    DDNS_CREATE_URL,
-    DDNS_ID,
-    DDNS_LIST_URL,
-    DDNS_OPTIONS,
-    ENTRY_DATA,
-    FETCH_URL,
-    FQDN,
-    WEBCALL_URL,
-    uapi_ok,
-)
+from .conftest import DDNS_OPTIONS, ENTRY_DATA, FQDN
 
 USER_INPUT = {**ENTRY_DATA, CONF_DOMAIN: " Home.Example.com ", CONF_DYNAMIC_DNS: True}
 
-
-@pytest.fixture(autouse=True)
-def _mock_setup(mock_cpanel: AiohttpClientMocker, mock_http: object) -> None:
-    """Let created entries set up against the mocked cPanel."""
+pytestmark = pytest.mark.usefixtures("mock_http")
 
 
 async def _async_submit(hass: HomeAssistant, user_input: dict[str, Any]) -> Any:
@@ -49,53 +38,28 @@ async def _async_submit(hass: HomeAssistant, user_input: dict[str, Any]) -> Any:
     return await hass.config_entries.flow.async_configure(result["flow_id"], user_input)
 
 
-async def test_user_flow(
-    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
-) -> None:
-    """Test creating an entry that uses an existing Dynamic DNS record."""
+async def test_user_flow(hass: HomeAssistant, mock_cpanel_client: AsyncMock) -> None:
+    """Test creating an entry that manages Dynamic DNS."""
     result = await _async_submit(hass, USER_INPUT)
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == FQDN
     assert result["data"] == ENTRY_DATA
     assert result["options"] == DDNS_OPTIONS
-    assert not any(
-        str(call[1]).startswith(DDNS_CREATE_URL.split("?")[0])
-        for call in aioclient_mock.mock_calls
-    )
-
-
-async def test_user_flow_creates_dynamic_dns(
-    hass: HomeAssistant,
-    aioclient_mock: AiohttpClientMocker,
-    certificate: dict[str, str],
-) -> None:
-    """Test the Dynamic DNS record is created when missing."""
-    aioclient_mock.clear_requests()
-    aioclient_mock.get(DDNS_LIST_URL, json=uapi_ok([]))
-    aioclient_mock.get(
-        DDNS_CREATE_URL, json=uapi_ok({"id": DDNS_ID, "created_time": 1})
-    )
-    aioclient_mock.get(FETCH_URL, json=uapi_ok(certificate))
-    aioclient_mock.get(WEBCALL_URL, text="OK")
-
-    result = await _async_submit(hass, USER_INPUT)
-    assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert any(str(call[1]) == DDNS_CREATE_URL for call in aioclient_mock.mock_calls)
+    mock_cpanel_client.ensure_dynamic_dns.assert_any_call(FQDN, "Home Assistant")
 
 
 async def test_user_flow_without_certificate(
-    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+    hass: HomeAssistant, mock_cpanel_client: AsyncMock
 ) -> None:
     """Test setup continues when AutoSSL has not issued a certificate yet."""
-    aioclient_mock.clear_requests()
-    aioclient_mock.get(FETCH_URL, json=uapi_ok(None))
-    aioclient_mock.get(AUTOSSL_URL, json=uapi_ok(None))
-
+    mock_cpanel_client.fetch_certificate.side_effect = CpanelNoCertificateError
     result = await _async_submit(hass, {**USER_INPUT, CONF_DYNAMIC_DNS: False})
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["options"] == {CONF_UPDATE_INTERVAL: 12, CONF_DYNAMIC_DNS: False}
+    mock_cpanel_client.ensure_dynamic_dns.assert_not_called()
 
 
+@pytest.mark.usefixtures("mock_cpanel_client")
 async def test_user_flow_suggests_external_url(hass: HomeAssistant) -> None:
     """Test the domain is prefilled from the external URL."""
     hass.config.external_url = f"https://{FQDN}:8123"
@@ -107,57 +71,43 @@ async def test_user_flow_suggests_external_url(hass: HomeAssistant) -> None:
 
 
 @pytest.mark.parametrize(
-    ("url", "response", "error"),
+    ("method", "exception", "error"),
     [
-        pytest.param(FETCH_URL, {"status": 401}, "invalid_auth", id="invalid_auth"),
         pytest.param(
-            FETCH_URL,
-            {"exc": aiohttp.ClientConnectionError()},
+            "fetch_certificate", CpanelAuthError, "invalid_auth", id="invalid_auth"
+        ),
+        pytest.param(
+            "fetch_certificate",
+            CpanelConnectionError,
             "cannot_connect",
             id="cannot_connect",
         ),
         pytest.param(
-            FETCH_URL,
-            {"json": {"status": 0, "errors": ["Feature disabled"], "data": None}},
-            "api_error",
-            id="api_error",
+            "fetch_certificate", CpanelApiError("nope"), "api_error", id="api_error"
         ),
         pytest.param(
-            DDNS_LIST_URL,
-            {"json": {"status": 0, "errors": ["No DDNS"], "data": None}},
+            "ensure_dynamic_dns",
+            CpanelApiError("no DDNS"),
             "api_error",
             id="dynamic_dns_error",
         ),
+        pytest.param("fetch_certificate", RuntimeError, "unknown", id="unknown"),
     ],
 )
 async def test_user_flow_errors(
     hass: HomeAssistant,
-    aioclient_mock: AiohttpClientMocker,
-    certificate: dict[str, str],
-    url: str,
-    response: dict[str, Any],
+    mock_cpanel_client: AsyncMock,
+    method: str,
+    exception: Exception | type[Exception],
     error: str,
 ) -> None:
     """Test errors are shown and the flow recovers."""
-    good_list = uapi_ok([{"domain": FQDN, "id": DDNS_ID}])
-    aioclient_mock.clear_requests()
-    aioclient_mock.get(url, **response)
-    aioclient_mock.get(DDNS_LIST_URL, json=good_list)
-    aioclient_mock.get(FETCH_URL, json=uapi_ok(certificate))
-
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": SOURCE_USER}
-    )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], USER_INPUT
-    )
+    getattr(mock_cpanel_client, method).side_effect = exception
+    result = await _async_submit(hass, USER_INPUT)
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": error}
 
-    aioclient_mock.clear_requests()
-    aioclient_mock.get(DDNS_LIST_URL, json=good_list)
-    aioclient_mock.get(FETCH_URL, json=uapi_ok(certificate))
-    aioclient_mock.get(WEBCALL_URL, text="OK")
+    getattr(mock_cpanel_client, method).side_effect = None
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], USER_INPUT
     )
@@ -176,6 +126,7 @@ async def test_single_instance(
     assert result["reason"] == "single_instance_allowed"
 
 
+@pytest.mark.usefixtures("mock_cpanel_client")
 async def test_reauth(hass: HomeAssistant, mock_config_entry: MockConfigEntry) -> None:
     """Test replacing the API token."""
     mock_config_entry.add_to_hass(hass)
@@ -191,6 +142,7 @@ async def test_reauth(hass: HomeAssistant, mock_config_entry: MockConfigEntry) -
 
 
 @pytest.mark.parametrize("entry_options", [DDNS_OPTIONS])
+@pytest.mark.usefixtures("mock_cpanel_client")
 async def test_options_flow(
     hass: HomeAssistant, mock_config_entry: MockConfigEntry
 ) -> None:
