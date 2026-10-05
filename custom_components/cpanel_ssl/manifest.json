@@ -1,0 +1,14 @@
+{
+  "domain": "cpanel_ssl",
+  "name": "cPanel SSL",
+  "codeowners": ["@bdraco"],
+  "config_flow": true,
+  "dependencies": ["http"],
+  "documentation": "https://github.com/bdraco/ha-cpanel-ssl",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/bdraco/ha-cpanel-ssl/issues",
+  "requirements": [],
+  "single_config_entry": true,
+  "version": "0.1.0"
+}
