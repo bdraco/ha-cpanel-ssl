@@ -1,0 +1,10 @@
+target-version = "py314"
+
+[lint]
+select = ["B", "E", "F", "I", "UP", "SIM", "RUF"]
+ignore = ["E501"]
+
+[lint.isort]
+force-sort-within-sections = true
+known-first-party = ["custom_components", "homeassistant"]
+combine-as-imports = true
