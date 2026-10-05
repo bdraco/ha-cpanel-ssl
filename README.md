@@ -2,7 +2,7 @@
 
 Keeps the Home Assistant HTTPS certificate in sync with the one cPanel issues through AutoSSL, and can keep a cPanel Dynamic DNS record pointed at your home IP.
 
-If your Home Assistant is reachable at a name hosted on a cPanel account (for example `home.example.com` set up under Domains, Dynamic DNS), cPanel already issues and renews a certificate for it. This integration copies that certificate to Home Assistant and loads it into the running web server, so renewals happen without a restart.
+If your Home Assistant is reachable at a name hosted on a cPanel account (for example `home.example.com`), cPanel AutoSSL issues and renews a certificate for it. This integration copies that certificate to Home Assistant and loads it into the running web server, so renewals happen without a restart.
 
 ## How it works
 
@@ -10,7 +10,8 @@ If your Home Assistant is reachable at a name hosted on a cPanel account (for ex
 * If the certificate changed, the full chain and private key are written to the paths in your `http:` configuration. The pair is verified before anything is replaced.
 * The new certificate is loaded into the running HTTP server; new connections use it right away.
 * When the certificate is within 14 days of expiry it asks cPanel to run AutoSSL.
-* If you give it a Dynamic DNS webcall URL, it calls it every 5 minutes so cPanel keeps your IP current. This replaces a `rest_command` or router based updater.
+* With Manage Dynamic DNS on, it finds the cPanel Dynamic DNS record for your hostname, creates it if missing, and calls its webcall every 5 minutes so the IP stays current. This replaces a `rest_command` or router based updater.
+* If AutoSSL has not issued a certificate yet, it asks AutoSSL to run and checks again every 15 minutes until one shows up.
 
 ## Installation
 
@@ -24,8 +25,8 @@ You need:
 
 * **cPanel host and port**: the name you use to log in to cPanel, usually on port 2083.
 * **Username and API token**: create a token in cPanel under Security, Manage API Tokens.
-* **Home Assistant hostname**: the name cPanel has a certificate for. It is prefilled from your external URL when one is set.
-* **Dynamic DNS webcall URL** (optional): shown in cPanel under Domains, Dynamic DNS after you create the record. Treat it like a password.
+* **Home Assistant hostname**: the name Home Assistant is reached at, for example `home.example.com`. It is prefilled from your external URL when one is set.
+* **Manage Dynamic DNS**: on by default. Leave it on if your home IP changes; turn it off if the name already points somewhere else.
 
 ### Serving HTTPS
 
@@ -45,7 +46,7 @@ Restart once after adding it. Later renewals are loaded without a restart.
 
 * **Certificate expiry**: when the installed certificate expires.
 * **Refresh certificate**: fetch from cPanel now.
-* **Update IP**: call the Dynamic DNS webcall now (only when a webcall URL is set).
+* **Update IP**: call the Dynamic DNS webcall now (only when Manage Dynamic DNS is on).
 
 ## Running more than one instance
 

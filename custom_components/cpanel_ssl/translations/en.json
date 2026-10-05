@@ -10,12 +10,12 @@
           "api_token": "API token",
           "domain": "Home Assistant hostname",
           "verify_ssl": "Verify the cPanel certificate",
-          "webcall_url": "Dynamic DNS webcall URL"
+          "dynamic_dns": "Manage Dynamic DNS"
         },
         "data_description": {
           "host": "The hostname you use to log in to cPanel, for example server.example.com.",
-          "domain": "The name Home Assistant is reached at, for example home.example.com. cPanel must already have a certificate for it.",
-          "webcall_url": "Optional. When set, Home Assistant calls it every five minutes so cPanel keeps your public IP current."
+          "domain": "The name Home Assistant is reached at, for example home.example.com. AutoSSL issues the certificate for it.",
+          "dynamic_dns": "Point this name at your public IP using cPanel Dynamic DNS. The record is created if it does not exist and updated every five minutes."
         }
       },
       "reauth_confirm": {
@@ -28,7 +28,6 @@
     "error": {
       "cannot_connect": "Failed to connect",
       "invalid_auth": "Invalid authentication",
-      "no_certificate": "cPanel has no certificate for this hostname yet. Make sure AutoSSL covers it.",
       "api_error": "cPanel returned an error: {error}",
       "unknown": "Unexpected error"
     },
@@ -42,10 +41,10 @@
       "init": {
         "data": {
           "update_interval": "Certificate check interval",
-          "webcall_url": "Dynamic DNS webcall URL"
+          "dynamic_dns": "Manage Dynamic DNS"
         },
         "data_description": {
-          "webcall_url": "Optional. Leave empty to stop updating the IP."
+          "dynamic_dns": "Keep the Dynamic DNS record pointed at your public IP."
         }
       }
     }

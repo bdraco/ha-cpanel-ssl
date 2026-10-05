@@ -45,6 +45,6 @@ class CpanelSslExpirySensor(
         CpanelSslEntity.__init__(self, entry, description)
 
     @property
-    def native_value(self) -> datetime:
+    def native_value(self) -> datetime | None:
         """Return the expiry time."""
         return self.coordinator.data

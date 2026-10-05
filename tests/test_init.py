@@ -17,7 +17,7 @@ from pytest_homeassistant_custom_component.test_util.aiohttp import (
 from custom_components.cpanel_ssl.const import DOMAIN
 from homeassistant.components.button import DOMAIN as BUTTON_DOMAIN, SERVICE_PRESS
 from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
-from homeassistant.const import ATTR_ENTITY_ID
+from homeassistant.const import ATTR_ENTITY_ID, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import issue_registry as ir
@@ -25,8 +25,11 @@ from homeassistant.util import dt as dt_util
 
 from .conftest import (
     AUTOSSL_URL,
+    DDNS_ID,
+    DDNS_LIST_URL,
+    DDNS_OPTIONS,
     FETCH_URL,
-    WEBCALL_OPTIONS,
+    FQDN,
     WEBCALL_URL,
     make_certificate,
     pem,
@@ -212,7 +215,7 @@ async def test_refresh_button(
 
 
 @pytest.mark.usefixtures("mock_http", "mock_cpanel")
-@pytest.mark.parametrize("entry_options", [WEBCALL_OPTIONS])
+@pytest.mark.parametrize("entry_options", [DDNS_OPTIONS])
 async def test_webcall(
     hass: HomeAssistant,
     aioclient_mock: AiohttpClientMocker,
@@ -235,7 +238,7 @@ async def test_webcall(
 
 
 @pytest.mark.usefixtures("mock_http")
-@pytest.mark.parametrize("entry_options", [WEBCALL_OPTIONS])
+@pytest.mark.parametrize("entry_options", [DDNS_OPTIONS])
 async def test_webcall_runs_while_certificate_fails(
     hass: HomeAssistant,
     aioclient_mock: AiohttpClientMocker,
@@ -243,6 +246,7 @@ async def test_webcall_runs_while_certificate_fails(
 ) -> None:
     """Test the IP is still updated when the certificate cannot be fetched."""
     aioclient_mock.get(FETCH_URL, status=500)
+    aioclient_mock.get(DDNS_LIST_URL, json=uapi_ok([{"domain": FQDN, "id": DDNS_ID}]))
     aioclient_mock.get(WEBCALL_URL, text="OK")
     await _setup(hass, mock_config_entry)
     assert mock_config_entry.state is ConfigEntryState.SETUP_RETRY
@@ -250,7 +254,7 @@ async def test_webcall_runs_while_certificate_fails(
 
 
 @pytest.mark.usefixtures("mock_http", "mock_cpanel")
-@pytest.mark.parametrize("entry_options", [WEBCALL_OPTIONS])
+@pytest.mark.parametrize("entry_options", [DDNS_OPTIONS])
 async def test_update_ip_button_error(
     hass: HomeAssistant,
     aioclient_mock: AiohttpClientMocker,
@@ -261,7 +265,6 @@ async def test_update_ip_button_error(
     await _setup(hass, mock_config_entry)
     aioclient_mock.clear_requests()
     aioclient_mock.get(WEBCALL_URL, status=500)
-    aioclient_mock.get(FETCH_URL, json=uapi_ok(certificate))
 
     with pytest.raises(HomeAssistantError, match="Dynamic DNS update failed"):
         await hass.services.async_call(
@@ -278,3 +281,48 @@ async def test_unload(hass: HomeAssistant, mock_config_entry: MockConfigEntry) -
     await _setup(hass, mock_config_entry)
     assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
     assert mock_config_entry.state is ConfigEntryState.NOT_LOADED
+
+
+@pytest.mark.usefixtures("mock_http")
+async def test_waits_for_autossl(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    mock_config_entry: MockConfigEntry,
+    ssl_paths: tuple[Path, Path],
+    certificate: dict[str, str],
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """Test AutoSSL is asked once and the certificate installed when issued."""
+    aioclient_mock.get(FETCH_URL, json=uapi_ok(None))
+    aioclient_mock.get(AUTOSSL_URL, json=uapi_ok(None))
+    await _setup(hass, mock_config_entry)
+    assert mock_config_entry.state is ConfigEntryState.LOADED
+    assert hass.states.get(EXPIRY_ENTITY).state == STATE_UNKNOWN
+    assert _calls(aioclient_mock, AUTOSSL_URL) == 1
+
+    freezer.tick(timedelta(minutes=15))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert _calls(aioclient_mock, FETCH_URL) == 2
+    assert _calls(aioclient_mock, AUTOSSL_URL) == 1
+
+    aioclient_mock.clear_requests()
+    aioclient_mock.get(FETCH_URL, json=uapi_ok(certificate))
+    freezer.tick(timedelta(minutes=15))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert ssl_paths[0].read_text() == pem(certificate["crt"])
+    assert hass.states.get(EXPIRY_ENTITY).state == "2027-01-01T00:00:00+00:00"
+
+
+@pytest.mark.parametrize("entry_options", [DDNS_OPTIONS])
+@pytest.mark.usefixtures("mock_http")
+async def test_dynamic_dns_lookup_fails(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """Test setup is retried when the Dynamic DNS record cannot be found."""
+    aioclient_mock.get(DDNS_LIST_URL, status=500)
+    await _setup(hass, mock_config_entry)
+    assert mock_config_entry.state is ConfigEntryState.SETUP_RETRY

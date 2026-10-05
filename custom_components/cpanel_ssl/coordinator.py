@@ -23,7 +23,13 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 from homeassistant.util.file import write_utf8_file
 
-from .api import Certificate, CpanelAuthError, CpanelClient, CpanelError
+from .api import (
+    Certificate,
+    CpanelAuthError,
+    CpanelClient,
+    CpanelError,
+    CpanelNoCertificateError,
+)
 from .const import (
     AUTOSSL_NUDGE_THRESHOLD,
     CERT_FILENAME,
@@ -32,6 +38,7 @@ from .const import (
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
     KEY_FILENAME,
+    PENDING_CERTIFICATE_INTERVAL,
 )
 from .dynamic_dns import DynamicDnsUpdater
 
@@ -82,8 +89,11 @@ def _install_certificate(
     return True, expires
 
 
-class CpanelSslCoordinator(DataUpdateCoordinator[datetime]):
-    """Fetch the certificate from cPanel, install it and track its expiry."""
+class CpanelSslCoordinator(DataUpdateCoordinator[datetime | None]):
+    """Fetch the certificate from cPanel, install it and track its expiry.
+
+    Data is the expiry, or None while AutoSSL has not issued a certificate yet.
+    """
 
     config_entry: CpanelSslConfigEntry
 
@@ -91,16 +101,18 @@ class CpanelSslCoordinator(DataUpdateCoordinator[datetime]):
         self, hass: HomeAssistant, entry: CpanelSslConfigEntry, client: CpanelClient
     ) -> None:
         """Initialize the coordinator."""
+        self._interval = timedelta(
+            hours=entry.options.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)
+        )
         super().__init__(
             hass,
             _LOGGER,
             config_entry=entry,
             name=DOMAIN,
-            update_interval=timedelta(
-                hours=entry.options.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)
-            ),
+            update_interval=self._interval,
         )
         self.client = client
+        self._autossl_requested = False
         self.domain: str = entry.data[CONF_DOMAIN]
 
         http = hass.http
@@ -132,10 +144,28 @@ class CpanelSslCoordinator(DataUpdateCoordinator[datetime]):
             },
         )
 
-    async def _async_update_data(self) -> datetime:
+    async def _async_start_autossl(self) -> None:
+        """Ask cPanel to run AutoSSL once until a new certificate shows up."""
+        if self._autossl_requested:
+            return
+        try:
+            await self.client.start_autossl_check()
+        except CpanelError as err:
+            _LOGGER.debug("Could not start AutoSSL check: %s", err)
+        else:
+            self._autossl_requested = True
+
+    async def _async_update_data(self) -> datetime | None:
         """Fetch, install and reload the certificate."""
         try:
             cert = await self.client.fetch_certificate(self.domain)
+        except CpanelNoCertificateError:
+            _LOGGER.info(
+                "Waiting for AutoSSL to issue a certificate for %s", self.domain
+            )
+            await self._async_start_autossl()
+            self.update_interval = PENDING_CERTIFICATE_INTERVAL
+            return None
         except CpanelAuthError as err:
             raise ConfigEntryAuthFailed(str(err)) from err
         except CpanelError as err:
@@ -148,7 +178,9 @@ class CpanelSslCoordinator(DataUpdateCoordinator[datetime]):
         except (OSError, ValueError, TypeError, HomeAssistantError) as err:
             raise UpdateFailed(f"Error installing certificate: {err}") from err
 
+        self.update_interval = self._interval
         if changed:
+            self._autossl_requested = False
             _LOGGER.info(
                 "Installed certificate for %s expiring %s", self.domain, expires
             )
@@ -156,10 +188,7 @@ class CpanelSslCoordinator(DataUpdateCoordinator[datetime]):
                 self._async_reload_http_certificate()
 
         if expires - dt_util.utcnow() < AUTOSSL_NUDGE_THRESHOLD:
-            try:
-                await self.client.start_autossl_check()
-            except CpanelError as err:
-                _LOGGER.debug("Could not start AutoSSL check: %s", err)
+            await self._async_start_autossl()
 
         return expires
 

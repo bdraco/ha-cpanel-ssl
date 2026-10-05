@@ -70,7 +70,7 @@ class CpanelClient:
     ) -> None:
         """Initialize the client."""
         self._session = session
-        self._base_url = f"https://{host}:{port}/execute"
+        self._server_url = f"https://{host}:{port}"
         self._headers = {"Authorization": f"cpanel {username}:{token}"}
 
     async def _get(self, url: str, **kwargs: Any) -> str:
@@ -89,18 +89,19 @@ class CpanelClient:
     async def _uapi(self, module: str, function: str, **params: str) -> Any:
         """Call a UAPI function and return its data."""
         body = await self._get(
-            f"{self._base_url}/{module}/{function}",
+            f"{self._server_url}/execute/{module}/{function}",
             params=params,
             headers=self._headers,
         )
         try:
             response: Any = json_loads(body)
-            result = response["result"]
-        except (ValueError, KeyError, TypeError) as err:
+        except ValueError as err:
             raise CpanelApiError(f"Unexpected response from cPanel: {err}") from err
-        if not result.get("status"):
-            raise CpanelApiError("; ".join(result.get("errors") or ["unknown error"]))
-        return result.get("data")
+        if not isinstance(response, dict):
+            raise CpanelApiError("Unexpected response from cPanel")
+        if not response.get("status"):
+            raise CpanelApiError("; ".join(response.get("errors") or ["unknown error"]))
+        return response.get("data")
 
     async def fetch_certificate(self, domain: str) -> Certificate:
         """Return the best installed certificate for a domain."""
@@ -112,6 +113,20 @@ class CpanelClient:
     async def start_autossl_check(self) -> None:
         """Ask cPanel to run AutoSSL for the account."""
         await self._uapi("SSL", "start_autossl_check")
+
+    async def async_get_webcall_url(self, domain: str) -> str:
+        """Return the Dynamic DNS webcall URL for a domain, creating the record if needed."""
+        records = await self._uapi("DynamicDNS", "list") or []
+        record_id = next(
+            (r["id"] for r in records if r.get("domain", "").lower() == domain),
+            None,
+        )
+        if record_id is None:
+            created = await self._uapi(
+                "DynamicDNS", "create", domain=domain, description="Home Assistant"
+            )
+            record_id = created["id"]
+        return f"{self._server_url}/cpanelwebcall/{record_id}"
 
     async def call_webcall(self, url: str) -> str:
         """Call a Dynamic DNS webcall so cPanel records our public IP."""

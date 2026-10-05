@@ -38,8 +38,8 @@ from .api import (
 )
 from .const import (
     CONF_DOMAIN,
+    CONF_DYNAMIC_DNS,
     CONF_UPDATE_INTERVAL,
-    CONF_WEBCALL_URL,
     DEFAULT_PORT,
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
@@ -49,21 +49,24 @@ from .coordinator import CpanelSslConfigEntry
 _LOGGER = logging.getLogger(__name__)
 
 PASSWORD_SELECTOR = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))
-URL_SELECTOR = TextSelector(TextSelectorConfig(type=TextSelectorType.URL))
 
 
 async def _async_validate(
-    hass: HomeAssistant, data: Mapping[str, Any]
+    hass: HomeAssistant, data: Mapping[str, Any], dynamic_dns: bool
 ) -> tuple[dict[str, str], dict[str, str]]:
-    """Fetch the certificate once; return errors and description placeholders."""
+    """Check the account and set up Dynamic DNS; return errors and placeholders."""
+    client = async_create_client(hass, data)
     try:
-        await async_create_client(hass, data).fetch_certificate(data[CONF_DOMAIN])
+        if dynamic_dns:
+            await client.async_get_webcall_url(data[CONF_DOMAIN])
+        await client.fetch_certificate(data[CONF_DOMAIN])
+    except CpanelNoCertificateError:
+        # AutoSSL issues it after setup.
+        pass
     except CpanelAuthError:
         return {"base": "invalid_auth"}, {}
     except CpanelConnectionError:
         return {"base": "cannot_connect"}, {}
-    except CpanelNoCertificateError:
-        return {"base": "no_certificate"}, {}
     except CpanelApiError as err:
         return {"base": "api_error"}, {"error": str(err)}
     except Exception:
@@ -73,15 +76,13 @@ async def _async_validate(
 
 
 def _build_options(user_input: Mapping[str, Any]) -> dict[str, Any]:
-    """Return entry options, dropping an empty webcall URL."""
-    options: dict[str, Any] = {
+    """Return entry options from form input."""
+    return {
         CONF_UPDATE_INTERVAL: int(
             user_input.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)
-        )
+        ),
+        CONF_DYNAMIC_DNS: user_input[CONF_DYNAMIC_DNS],
     }
-    if webcall_url := user_input.get(CONF_WEBCALL_URL):
-        options[CONF_WEBCALL_URL] = webcall_url
-    return options
 
 
 class CpanelSslConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -97,10 +98,12 @@ class CpanelSslConfigFlow(ConfigFlow, domain=DOMAIN):
         placeholders: dict[str, str] = {}
         if user_input is not None:
             user_input[CONF_DOMAIN] = user_input[CONF_DOMAIN].strip().lower()
-            errors, placeholders = await _async_validate(self.hass, user_input)
+            errors, placeholders = await _async_validate(
+                self.hass, user_input, user_input[CONF_DYNAMIC_DNS]
+            )
             if not errors:
                 options = _build_options(user_input)
-                user_input.pop(CONF_WEBCALL_URL, None)
+                del user_input[CONF_DYNAMIC_DNS]
                 return self.async_create_entry(
                     title=user_input[CONF_DOMAIN],
                     data=user_input,
@@ -118,7 +121,7 @@ class CpanelSslConfigFlow(ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_API_TOKEN): PASSWORD_SELECTOR,
                 vol.Required(CONF_DOMAIN): str,
                 vol.Required(CONF_VERIFY_SSL, default=True): bool,
-                vol.Optional(CONF_WEBCALL_URL): URL_SELECTOR,
+                vol.Required(CONF_DYNAMIC_DNS, default=True): bool,
             }
         )
         return self.async_show_form(
@@ -143,7 +146,9 @@ class CpanelSslConfigFlow(ConfigFlow, domain=DOMAIN):
         placeholders: dict[str, str] = {}
         if user_input is not None:
             data = {**entry.data, CONF_API_TOKEN: user_input[CONF_API_TOKEN]}
-            errors, placeholders = await _async_validate(self.hass, data)
+            errors, placeholders = await _async_validate(
+                self.hass, data, entry.options[CONF_DYNAMIC_DNS]
+            )
             if not errors:
                 return self.async_update_reload_and_abort(entry, data=data)
         return self.async_show_form(
@@ -167,7 +172,7 @@ class CpanelSslConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class CpanelSslOptionsFlow(OptionsFlowWithReload):
-    """Change the update interval and Dynamic DNS webcall."""
+    """Change the update interval and Dynamic DNS."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -188,7 +193,7 @@ class CpanelSslOptionsFlow(OptionsFlowWithReload):
                         mode=NumberSelectorMode.BOX,
                     )
                 ),
-                vol.Optional(CONF_WEBCALL_URL): URL_SELECTOR,
+                vol.Required(CONF_DYNAMIC_DNS, default=True): bool,
             }
         )
         return self.async_show_form(

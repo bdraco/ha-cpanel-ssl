@@ -17,8 +17,8 @@ from pytest_homeassistant_custom_component.test_util.aiohttp import (
 
 from custom_components.cpanel_ssl.const import (
     CONF_DOMAIN,
+    CONF_DYNAMIC_DNS,
     CONF_UPDATE_INTERVAL,
-    CONF_WEBCALL_URL,
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
 )
@@ -35,7 +35,10 @@ HOST = "server.example.com"
 FQDN = "home.example.com"
 FETCH_URL = f"https://{HOST}:2083/execute/SSL/fetch_best_for_domain?domain={FQDN}"
 AUTOSSL_URL = f"https://{HOST}:2083/execute/SSL/start_autossl_check"
-WEBCALL_URL = f"https://{HOST}:2083/cpanelwebcall/abcdefghijklmnopqrstuvwxyzabcdef"
+DDNS_ID = "abcdefghijklmnopqrstuvwxyzabcdef"
+DDNS_LIST_URL = f"https://{HOST}:2083/execute/DynamicDNS/list"
+DDNS_CREATE_URL = f"https://{HOST}:2083/execute/DynamicDNS/create?domain={FQDN}&description=Home+Assistant"
+WEBCALL_URL = f"https://{HOST}:2083/cpanelwebcall/{DDNS_ID}"
 NOT_AFTER = datetime(2027, 1, 1, tzinfo=UTC)
 
 ENTRY_DATA = {
@@ -80,7 +83,7 @@ def make_certificate(not_after: datetime = NOT_AFTER) -> dict[str, str]:
 
 def uapi_ok(data: object) -> dict[str, object]:
     """Wrap data in a successful UAPI response."""
-    return {"result": {"status": 1, "data": data, "errors": None}}
+    return {"status": 1, "data": data, "errors": None, "messages": None}
 
 
 @pytest.fixture
@@ -96,6 +99,15 @@ def mock_cpanel(
     """Mock a cPanel account with a certificate."""
     aioclient_mock.get(FETCH_URL, json=uapi_ok(certificate))
     aioclient_mock.get(AUTOSSL_URL, json=uapi_ok(None))
+    aioclient_mock.get(
+        DDNS_LIST_URL,
+        json=uapi_ok(
+            [
+                {"domain": "other.example.com", "id": "x" * 32},
+                {"domain": FQDN, "id": DDNS_ID},
+            ]
+        ),
+    )
     aioclient_mock.get(WEBCALL_URL, text="OK")
     return aioclient_mock
 
@@ -121,8 +133,8 @@ def mock_http(hass: HomeAssistant, ssl_paths: tuple[Path, Path]) -> SimpleNamesp
 
 @pytest.fixture
 def entry_options() -> dict[str, object]:
-    """Return config entry options; override to add a webcall."""
-    return {CONF_UPDATE_INTERVAL: DEFAULT_UPDATE_INTERVAL}
+    """Return config entry options; override to enable Dynamic DNS."""
+    return {CONF_UPDATE_INTERVAL: DEFAULT_UPDATE_INTERVAL, CONF_DYNAMIC_DNS: False}
 
 
 @pytest.fixture
@@ -138,7 +150,4 @@ def pem(text: str) -> str:
     return text.strip() + "\n"
 
 
-WEBCALL_OPTIONS = {
-    CONF_UPDATE_INTERVAL: DEFAULT_UPDATE_INTERVAL,
-    CONF_WEBCALL_URL: WEBCALL_URL,
-}
+DDNS_OPTIONS = {CONF_UPDATE_INTERVAL: DEFAULT_UPDATE_INTERVAL, CONF_DYNAMIC_DNS: True}
