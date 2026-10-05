@@ -8,7 +8,8 @@ CONF_DOMAIN = "domain"
 CONF_DYNAMIC_DNS = "dynamic_dns"
 CONF_UPDATE_INTERVAL = "update_interval"
 
-DEFAULT_PORT = 2083
+DYNAMIC_DNS_DESCRIPTION = "Home Assistant"
+
 DEFAULT_UPDATE_INTERVAL = 12
 
 # Check more often while waiting for AutoSSL to issue a first certificate.

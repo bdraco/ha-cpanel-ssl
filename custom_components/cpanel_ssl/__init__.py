@@ -1,15 +1,17 @@
 """The cPanel SSL integration."""
 
+from aiocpanel import CpanelAuthError, CpanelError
+
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 
-from .api import CpanelAuthError, CpanelError, async_create_client
-from .const import CONF_DOMAIN, CONF_DYNAMIC_DNS
+from .const import CONF_DOMAIN, CONF_DYNAMIC_DNS, DYNAMIC_DNS_DESCRIPTION
 from .coordinator import (
     CpanelSslConfigEntry,
     CpanelSslCoordinator,
     CpanelSslRuntimeData,
+    async_create_client,
 )
 from .dynamic_dns import DynamicDnsUpdater
 
@@ -23,12 +25,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: CpanelSslConfigEntry) ->
     dynamic_dns: DynamicDnsUpdater | None = None
     if entry.options.get(CONF_DYNAMIC_DNS):
         try:
-            webcall_url = await client.async_get_webcall_url(entry.data[CONF_DOMAIN])
+            record = await client.ensure_dynamic_dns(
+                entry.data[CONF_DOMAIN], DYNAMIC_DNS_DESCRIPTION
+            )
         except CpanelAuthError as err:
             raise ConfigEntryAuthFailed(str(err)) from err
         except CpanelError as err:
             raise ConfigEntryNotReady(f"Error setting up Dynamic DNS: {err}") from err
-        dynamic_dns = DynamicDnsUpdater(hass, client, webcall_url)
+        dynamic_dns = DynamicDnsUpdater(hass, client, record)
         # Started first so the IP is updated even if the certificate fetch fails.
         dynamic_dns.async_start(entry)
 

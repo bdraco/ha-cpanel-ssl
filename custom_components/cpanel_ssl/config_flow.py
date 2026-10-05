@@ -5,6 +5,13 @@ import logging
 from typing import Any
 from urllib.parse import urlparse
 
+from aiocpanel import (
+    DEFAULT_PORT,
+    CpanelApiError,
+    CpanelAuthError,
+    CpanelConnectionError,
+    CpanelNoCertificateError,
+)
 import voluptuous as vol
 
 from homeassistant.config_entries import (
@@ -29,22 +36,15 @@ from homeassistant.helpers.selector import (
     TextSelectorType,
 )
 
-from .api import (
-    CpanelApiError,
-    CpanelAuthError,
-    CpanelConnectionError,
-    CpanelNoCertificateError,
-    async_create_client,
-)
 from .const import (
     CONF_DOMAIN,
     CONF_DYNAMIC_DNS,
     CONF_UPDATE_INTERVAL,
-    DEFAULT_PORT,
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
+    DYNAMIC_DNS_DESCRIPTION,
 )
-from .coordinator import CpanelSslConfigEntry
+from .coordinator import CpanelSslConfigEntry, async_create_client
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ async def _async_validate(
     client = async_create_client(hass, data)
     try:
         if dynamic_dns:
-            await client.async_get_webcall_url(data[CONF_DOMAIN])
+            await client.ensure_dynamic_dns(data[CONF_DOMAIN], DYNAMIC_DNS_DESCRIPTION)
         await client.fetch_certificate(data[CONF_DOMAIN])
     except CpanelNoCertificateError:
         # AutoSSL issues it after setup.

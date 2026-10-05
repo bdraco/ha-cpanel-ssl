@@ -3,11 +3,11 @@
 from datetime import datetime, timedelta
 import logging
 
+from aiocpanel import CpanelClient, CpanelError, DynamicDnsRecord
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.event import async_track_time_interval
-
-from .api import CpanelClient, CpanelError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -17,16 +17,18 @@ UPDATE_INTERVAL = timedelta(minutes=5)
 class DynamicDnsUpdater:
     """Call the Dynamic DNS webcall on a timer."""
 
-    def __init__(self, hass: HomeAssistant, client: CpanelClient, url: str) -> None:
+    def __init__(
+        self, hass: HomeAssistant, client: CpanelClient, record: DynamicDnsRecord
+    ) -> None:
         """Initialize the updater."""
         self._hass = hass
         self._client = client
-        self._url = url
+        self._record = record
         self._failed = False
 
     async def async_update(self) -> None:
         """Call the webcall; raises CpanelError on failure."""
-        response = await self._client.call_webcall(self._url)
+        response = await self._client.call_webcall(self._record)
         _LOGGER.debug("Dynamic DNS update response: %s", response)
 
     async def _async_scheduled_update(self, _now: datetime | None = None) -> None:

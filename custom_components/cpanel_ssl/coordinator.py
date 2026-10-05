@@ -1,5 +1,6 @@
 """Keep the Home Assistant certificate in sync with cPanel."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import logging
@@ -7,6 +8,13 @@ from pathlib import Path
 import ssl
 from typing import Any, cast
 
+from aiocpanel import (
+    Certificate,
+    CpanelAuthError,
+    CpanelClient,
+    CpanelError,
+    CpanelNoCertificateError,
+)
 from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric.types import PrivateKeyTypes
 from cryptography.hazmat.primitives.serialization import (
@@ -24,22 +32,23 @@ from homeassistant.components.http.config import (
 )
 from homeassistant.components.http.const import CONF_SSL_CERTIFICATE, CONF_SSL_KEY
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import (
+    CONF_API_TOKEN,
+    CONF_HOST,
+    CONF_PORT,
+    CONF_USERNAME,
+    CONF_VERIFY_SSL,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.hassio import is_hassio
 from homeassistant.helpers.start import async_at_started
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 from homeassistant.util.file import write_utf8_file
 
-from .api import (
-    Certificate,
-    CpanelAuthError,
-    CpanelClient,
-    CpanelError,
-    CpanelNoCertificateError,
-)
 from .const import (
     AUTOSSL_NUDGE_THRESHOLD,
     CERT_FILENAME,
@@ -72,6 +81,17 @@ class CpanelSslRuntimeData:
 type CpanelSslConfigEntry = ConfigEntry[CpanelSslRuntimeData]
 
 
+def async_create_client(hass: HomeAssistant, data: Mapping[str, Any]) -> CpanelClient:
+    """Create a client from config entry data."""
+    return CpanelClient(
+        async_get_clientsession(hass, verify_ssl=data[CONF_VERIFY_SSL]),
+        data[CONF_HOST],
+        data[CONF_USERNAME],
+        data[CONF_API_TOKEN],
+        port=data[CONF_PORT],
+    )
+
+
 def _public_key_der(obj: x509.Certificate | PrivateKeyTypes) -> bytes:
     """Return the DER encoded public key of a certificate or private key."""
     return obj.public_key().public_bytes(
@@ -90,7 +110,7 @@ def _install_certificate(
         raise ValueError("certificate does not match its private key")
 
     fullchain = cert.fullchain
-    key = cert.key.strip() + "\n"
+    key = cert.key_pem
     expires = leaf.not_valid_after_utc
     try:
         if cert_path.read_text() == fullchain and key_path.read_text() == key:
