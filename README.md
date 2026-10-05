@@ -1,5 +1,9 @@
 # cPanel SSL for Home Assistant
 
+[![Validate](https://github.com/bdraco/ha-cpanel-ssl/actions/workflows/validate.yml/badge.svg?branch=main)](https://github.com/bdraco/ha-cpanel-ssl/actions/workflows/validate.yml)
+[![codecov](https://codecov.io/gh/bdraco/ha-cpanel-ssl/branch/main/graph/badge.svg)](https://codecov.io/gh/bdraco/ha-cpanel-ssl)
+[![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz/docs/faq/custom_repositories)
+
 Keeps the Home Assistant HTTPS certificate in sync with the one cPanel issues through AutoSSL, and can keep a cPanel Dynamic DNS record pointed at your home IP.
 
 If your Home Assistant is reachable at a name hosted on a cPanel account (for example `home.example.com`), cPanel AutoSSL issues and renews a certificate for it. This integration copies that certificate to Home Assistant and loads it into the running web server, so renewals happen without a restart.
