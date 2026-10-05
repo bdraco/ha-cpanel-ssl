@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import logging
 from pathlib import Path
 import ssl
+from typing import Any, cast
 
 from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric.types import PrivateKeyTypes
@@ -14,11 +15,20 @@ from cryptography.hazmat.primitives.serialization import (
     load_pem_private_key,
 )
 
+from homeassistant.components.http.config import (
+    HTTP_CONFIG_CREATED_AT,
+    HTTP_CONFIG_ERROR,
+    HTTP_CONFIG_ERROR_MESSAGE,
+    ConfData,
+    async_get_and_load_store,
+)
+from homeassistant.components.http.const import CONF_SSL_CERTIFICATE, CONF_SSL_KEY
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.hassio import is_hassio
+from homeassistant.helpers.start import async_at_started
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 from homeassistant.util.file import write_utf8_file
@@ -43,6 +53,12 @@ from .const import (
 from .dynamic_dns import DynamicDnsUpdater
 
 _LOGGER = logging.getLogger(__name__)
+
+HTTP_CONFIG_META = (
+    HTTP_CONFIG_CREATED_AT,
+    HTTP_CONFIG_ERROR,
+    HTTP_CONFIG_ERROR_MESSAGE,
+)
 
 
 @dataclass(slots=True)
@@ -113,6 +129,7 @@ class CpanelSslCoordinator(DataUpdateCoordinator[datetime | None]):
         )
         self.client = client
         self._autossl_requested = False
+        self._https_requested = False
         self.domain: str = entry.data[CONF_DOMAIN]
 
         http = hass.http
@@ -127,22 +144,55 @@ class CpanelSslCoordinator(DataUpdateCoordinator[datetime | None]):
             self.key_path = ssl_dir / KEY_FILENAME
 
     async def _async_setup(self) -> None:
-        """Tell the user how to serve the certificate if HTTPS is off."""
+        """Clear a stale repair once HTTPS is on."""
         if self.http_ssl_configured:
-            ir.async_delete_issue(self.hass, DOMAIN, "ssl_not_configured")
-            return
-        ir.async_create_issue(
-            self.hass,
-            DOMAIN,
-            "ssl_not_configured",
-            is_fixable=False,
-            severity=ir.IssueSeverity.WARNING,
-            translation_key="ssl_not_configured",
-            translation_placeholders={
-                "cert_path": str(self.cert_path),
-                "key_path": str(self.key_path),
-            },
+            ir.async_delete_issue(self.hass, DOMAIN, "https_not_confirmed")
+
+    async def _async_enable_https(self, _hass: HomeAssistant) -> None:
+        """Stage the certificate in the HTTP config and restart to try it.
+
+        Home Assistant asks the user to keep the new settings and reverts on
+        its own if nobody confirms, so a bad switch cannot lock anyone out.
+        """
+        store = await async_get_and_load_store(self.hass)
+        if (pending := store.pending) is not None:
+            if (
+                pending.get(CONF_SSL_CERTIFICATE) == str(self.cert_path)
+                and pending[HTTP_CONFIG_ERROR]
+            ):
+                # Our trial was reverted; retrying would restart in a loop.
+                ir.async_create_issue(
+                    self.hass,
+                    DOMAIN,
+                    "https_not_confirmed",
+                    is_fixable=False,
+                    severity=ir.IssueSeverity.WARNING,
+                    learn_more_url="homeassistant://config/network",
+                    translation_key="https_not_confirmed",
+                    translation_placeholders={
+                        "cert_path": str(self.cert_path),
+                        "key_path": str(self.key_path),
+                    },
+                )
+                return
+            if pending[HTTP_CONFIG_ERROR] is None:
+                # Leave a trial the user staged alone.
+                return
+
+        config: dict[str, Any] = {
+            key: value
+            for key, value in store.stable.items()
+            if key not in HTTP_CONFIG_META
+        }
+        config[CONF_SSL_CERTIFICATE] = str(self.cert_path)
+        config[CONF_SSL_KEY] = str(self.key_path)
+        _LOGGER.warning(
+            "Restarting to serve the certificate for %s over HTTPS; confirm the"
+            " new HTTP settings when asked or they revert in a few minutes",
+            self.domain,
         )
+        await store.async_set_pending(cast(ConfData, config))
+        await self.hass.services.async_call("homeassistant", "restart")
 
     async def _async_start_autossl(self) -> None:
         """Ask cPanel to run AutoSSL once until a new certificate shows up."""
@@ -179,6 +229,11 @@ class CpanelSslCoordinator(DataUpdateCoordinator[datetime | None]):
             raise UpdateFailed(f"Error installing certificate: {err}") from err
 
         self.update_interval = self._interval
+        if not self.http_ssl_configured and not self._https_requested:
+            self._https_requested = True
+            self.config_entry.async_on_unload(
+                async_at_started(self.hass, self._async_enable_https)
+            )
         if changed:
             self._autossl_requested = False
             _LOGGER.info(

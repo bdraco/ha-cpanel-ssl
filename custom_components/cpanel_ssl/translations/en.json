@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "description": "Connect to the cPanel account that hosts your Dynamic DNS name. Create an API token in cPanel under Security, Manage API Tokens.",
+        "description": "Connect to the cPanel account that hosts your domain. Create an API token in cPanel under Security, Manage API Tokens. If Home Assistant is not serving HTTPS yet, it is switched over and restarted once; confirm the new HTTP settings when asked.",
         "data": {
           "host": "cPanel host",
           "port": "cPanel port",
@@ -65,9 +65,9 @@
     }
   },
   "issues": {
-    "ssl_not_configured": {
-      "title": "Home Assistant is not serving HTTPS",
-      "description": "The certificate was saved to {cert_path} and {key_path}, but Home Assistant is not using it. Add the following to configuration.yaml and restart:\n\n```yaml\nhttp:\n  ssl_certificate: {cert_path}\n  ssl_key: {key_path}\n```"
+    "https_not_confirmed": {
+      "title": "HTTPS was not turned on",
+      "description": "Home Assistant was switched to HTTPS with the certificate in {cert_path}, but the new HTTP settings were not confirmed and were reverted. To try again, go to Settings, System, Network and under HTTP server set the SSL certificate path to `{cert_path}` and the SSL key path to `{key_path}`."
     }
   }
 }

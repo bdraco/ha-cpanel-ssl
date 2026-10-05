@@ -30,17 +30,13 @@ You need:
 
 ### Serving HTTPS
 
-If Home Assistant is already configured with `ssl_certificate` and `ssl_key`, those files are kept up to date.
+If Home Assistant already serves HTTPS, the certificate and key files it uses are kept up to date.
 
-If not, the certificate is saved to `/ssl/fullchain.pem` and `/ssl/privkey.pem` (or `<config>/ssl` when `/ssl` does not exist) and a repair tells you what to add:
+If not, the certificate is saved to `/ssl` (or `<config>/ssl` outside Home Assistant OS) and the integration sets those paths in the HTTP server settings, then restarts Home Assistant once. Home Assistant asks you to keep the new settings; if nobody confirms within a few minutes it switches back on its own and a repair explains how to set the paths yourself under Settings, System, Network.
 
-```yaml
-http:
-  ssl_certificate: /ssl/fullchain.pem
-  ssl_key: /ssl/privkey.pem
-```
+Later renewals are loaded without a restart.
 
-Restart once after adding it. Later renewals are loaded without a restart.
+Requires Home Assistant 2026.8 or newer.
 
 ## Entities
 

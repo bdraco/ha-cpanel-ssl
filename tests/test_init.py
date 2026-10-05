@@ -3,12 +3,14 @@
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 from freezegun.api import FrozenDateTimeFactory
 import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     async_fire_time_changed,
+    async_mock_service,
 )
 from pytest_homeassistant_custom_component.test_util.aiohttp import (
     AiohttpClientMocker,
@@ -16,6 +18,7 @@ from pytest_homeassistant_custom_component.test_util.aiohttp import (
 
 from custom_components.cpanel_ssl.const import DOMAIN
 from homeassistant.components.button import DOMAIN as BUTTON_DOMAIN, SERVICE_PRESS
+from homeassistant.components.http.config import async_get_and_load_store
 from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
 from homeassistant.const import ATTR_ENTITY_ID, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
@@ -167,23 +170,85 @@ async def test_recovery_mode_without_context(
     assert ssl_paths[0].exists()
 
 
-@pytest.mark.usefixtures("mock_cpanel")
-async def test_ssl_not_configured(
-    hass: HomeAssistant,
-    issue_registry: ir.IssueRegistry,
-    mock_config_entry: MockConfigEntry,
-    mock_http: SimpleNamespace,
-    tmp_path: Path,
-) -> None:
-    """Test the cert is saved and the user is told how to enable HTTPS."""
+def _http_storage(pending: dict[str, Any] | None) -> dict[str, Any]:
+    """Return stored HTTP config with an optional pending trial."""
+    return {
+        "version": 2,
+        "minor_version": 2,
+        "key": "http",
+        "data": {
+            "stable": {"server_port": 8123, "created_at": None, "error": None},
+            "pending": pending,
+            "yaml_migration_done": True,
+        },
+    }
+
+
+@pytest.fixture
+def https_off(mock_http: SimpleNamespace, hass: HomeAssistant, tmp_path: Path) -> Path:
+    """Run as if HTTPS is not configured; return the ssl directory used."""
     mock_http.ssl_certificate = None
     mock_http.ssl_key = None
     hass.config.config_dir = str(tmp_path / "config")
+    return tmp_path / "config" / "ssl"
+
+
+@pytest.mark.usefixtures("mock_cpanel")
+async def test_enables_https(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_http: SimpleNamespace,
+    https_off: Path,
+) -> None:
+    """Test the certificate is staged as a pending HTTP config and HA restarts."""
+    restart_calls = async_mock_service(hass, "homeassistant", "restart")
     await _setup(hass, mock_config_entry)
 
-    assert (tmp_path / "config" / "ssl" / "fullchain.pem").exists()
-    assert issue_registry.async_get_issue(DOMAIN, "ssl_not_configured")
+    assert (https_off / "fullchain.pem").exists()
     mock_http.context.load_cert_chain.assert_not_called()
+    assert len(restart_calls) == 1
+    pending = (await async_get_and_load_store(hass)).pending
+    assert pending["server_port"] == 8123
+    assert pending["ssl_certificate"] == str(https_off / "fullchain.pem")
+    assert pending["ssl_key"] == str(https_off / "privkey.pem")
+
+
+@pytest.mark.usefixtures("mock_cpanel")
+async def test_reverted_https_trial_not_retried(
+    hass: HomeAssistant,
+    hass_storage: dict[str, Any],
+    issue_registry: ir.IssueRegistry,
+    mock_config_entry: MockConfigEntry,
+    https_off: Path,
+) -> None:
+    """Test a reverted trial is not staged again, which would restart in a loop."""
+    hass_storage["http"] = _http_storage(
+        {"ssl_certificate": str(https_off / "fullchain.pem"), "error": "not_promoted"}
+    )
+    restart_calls = async_mock_service(hass, "homeassistant", "restart")
+    await _setup(hass, mock_config_entry)
+
+    assert restart_calls == []
+    assert issue_registry.async_get_issue(DOMAIN, "https_not_confirmed")
+
+
+@pytest.mark.usefixtures("mock_cpanel")
+async def test_user_http_trial_left_alone(
+    hass: HomeAssistant,
+    hass_storage: dict[str, Any],
+    issue_registry: ir.IssueRegistry,
+    mock_config_entry: MockConfigEntry,
+    https_off: Path,
+) -> None:
+    """Test a trial the user staged is not replaced."""
+    hass_storage["http"] = _http_storage(
+        {"ssl_certificate": "/other/cert.pem", "error": None}
+    )
+    restart_calls = async_mock_service(hass, "homeassistant", "restart")
+    await _setup(hass, mock_config_entry)
+
+    assert restart_calls == []
+    assert issue_registry.async_get_issue(DOMAIN, "https_not_confirmed") is None
 
 
 @pytest.mark.usefixtures("mock_http")
